@@ -121,7 +121,7 @@ cmd_exec() {
   # Só marca como feito depois que o Claude terminou com sucesso.
   if [[ -n "$ctx" ]]; then printf '%s\n' "$ctx" >>"$ROTINA_STATE"; fi
   if [[ "$NOTIFY" == 1 ]] && command -v notify-send >/dev/null; then
-    notify-send "Rotina $n" "$(head -c 300 "$out")" || true
+    notify-send "Rotina $n" "$(grep -v "^<!--" "$out" | head -c 300 | iconv -c -f utf-8 -t utf-8 2>/dev/null)" || true
   fi
   echo "saída: $out"
 }
