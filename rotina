@@ -89,7 +89,13 @@ cmd_exec() {
     if [[ -z "$ctx" ]]; then echo "nada novo, pulando"; return 0; fi
   fi
 
+  # Pasta de rascunho da rotina, liberada para o Claude com --add-dir: sem ela,
+  # no modo dontAsk, qualquer escrita fora de $DIR (worktree, /tmp) é negada.
+  local tmp="${TMPDIR:-/tmp}/rotina-$n"
+  mkdir -p "$tmp"
+
   prompt="$(cat "$d/prompt.md")"
+  prompt+=$'\n\nPasta temporária desta rotina (worktrees, arquivos de trabalho): `'"$tmp"'`.'
   [[ -n "$ctx" ]] && prompt+=$'\n\n## Itens desta execução\n'"$ctx"
   out="$d/saidas/$(date +%F_%H%M).md"
   if [[ "$SESSAO" == 1 ]]; then
@@ -101,7 +107,7 @@ cmd_exec() {
   else
     flags=(--no-session-persistence)
   fi
-  ( cd "$DIR" && claude -p "$prompt" --permission-mode "$MODE" --allowedTools "$TOOLS" "${flags[@]}" ) >>"$out"
+  ( cd "$DIR" && claude -p "$prompt" --permission-mode "$MODE" --allowedTools "$TOOLS" --add-dir "$tmp" "${flags[@]}" ) >>"$out"
 
   # Só marca como feito depois que o Claude terminou com sucesso.
   if [[ -n "$ctx" ]]; then printf '%s\n' "$ctx" >>"$ROTINA_STATE"; fi
