@@ -124,7 +124,7 @@ cmd_new() {
 SCHEDULE="*:0/15"
 
 # Pasta onde o claude roda (usa o CLAUDE.md e o .mcp.json de lá)
-DIR="$HOME/tempus"
+DIR="$HOME/projeto"
 
 # Ferramentas liberadas. Com MODE=dontAsk, todo o resto é negado.
 TOOLS="Read,Grep,Glob"
