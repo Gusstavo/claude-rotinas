@@ -97,7 +97,7 @@ cmd_exec() {
     sid="$(cat /proc/sys/kernel/random/uuid)"
     flags=(--session-id "$sid" --name "rotina:$n $(date '+%d/%m %H:%M')")
     echo "$sid" >"$STATE_DIR/$n.ultima-sessao"
-    printf '<!-- sessão: %s — reabra com: rotina continuar %s -->\n\n' "$sid" "$n" >"$out"
+    printf '<!-- sessão: %s — reabra com: rotina continue %s -->\n\n' "$sid" "$n" >"$out"
   else
     flags=(--no-session-persistence)
   fi
@@ -133,7 +133,7 @@ MODE="dontAsk"
 # Notificação no desktop ao terminar (1 liga, 0 desliga)
 NOTIFY=1
 
-# Salvar a sessão para abrir depois no /resume ou com "rotina continuar" (1/0)
+# Salvar a sessão para abrir depois no /resume ou com "rotina continue" (1/0)
 SESSAO=1
 EOF
   printf '# Rotina: %s\n\nDescreva aqui o que o Claude deve fazer.\n' "$n" >"$ROOT/$n/prompt.md"
@@ -181,8 +181,8 @@ cmd_run() {
 }
 
 # Abre a última execução como sessão interativa, para continuar a conversa.
-cmd_continuar() {
-  local n="${1:?uso: rotina continuar <nome>}"; exists "$n"; load_conf "$n"
+cmd_continue() {
+  local n="${1:?uso: rotina continue <nome>}"; exists "$n"; load_conf "$n"
   local f="$STATE_DIR/$n.ultima-sessao"
   [[ -s "$f" ]] || die "'$n' ainda não tem sessão salva"
   cd "$DIR" && exec claude --resume "$(cat "$f")"
@@ -199,7 +199,7 @@ uso: rotina <comando> [nome]
   edit <nome>       edita prompt/agenda/gate e reaplica
   run <nome>        executa agora
   logs <nome> [-f]  mostra o log (-f acompanha)
-  continuar <nome>  abre a última execução no claude para seguir a conversa
+  continue <nome>   abre a última execução no claude para seguir a conversa
   pause <nome>      para de agendar, sem apagar
   resume <nome>     volta a agendar
   rm <nome>         remove (vai para $ROOT/.lixeira)
@@ -215,7 +215,7 @@ case "${1:-}" in
   edit)    cmd_edit "${2:-}" ;;
   run)     cmd_run "${2:-}" ;;
   logs)    shift; cmd_logs "$@" ;;
-  continuar) cmd_continuar "${2:-}" ;;
+  continue)  cmd_continue "${2:-}" ;;
   pause)   cmd_pause "${2:?uso: rotina pause <nome>}" ;;
   resume)  cmd_resume "${2:?uso: rotina resume <nome>}" ;;
   rm)      cmd_rm "${2:-}" ;;

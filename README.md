@@ -5,7 +5,7 @@ Rotinas do Claude Code agendadas **localmente no Linux**, via timers de usuário
 - Rodam sozinhas depois do boot, sem precisar abrir nada.
 - Se o PC estava desligado no horário, rodam assim que ele liga.
 - Um `gate.sh` opcional faz uma checagem barata antes. Se não há nada novo, o Claude nem é chamado.
-- Cada execução vira uma sessão com nome no `/resume` e pode ser reaberta com `rotina continuar`.
+- Cada execução vira uma sessão com nome no `/resume` e pode ser reaberta com `rotina continue`.
 
 ## Instalação
 
@@ -24,7 +24,7 @@ rotina new <nome>           # cria (abre o editor) e agenda
 rotina edit <nome>          # muda prompt, agenda, ferramentas ou gate e reaplica
 rotina run <nome>           # roda agora
 rotina logs <nome> [-f]     # log da execução
-rotina continuar <nome>     # abre a última execução no claude para seguir a conversa
+rotina continue <nome>     # abre a última execução no claude para seguir a conversa
 rotina pause|resume <nome>  # desliga/religa sem apagar
 rotina rm <nome>            # remove (vai para ~/rotinas/.lixeira)
 rotina sync                 # reaplica tudo após editar arquivos à mão
