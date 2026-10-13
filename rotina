@@ -79,7 +79,7 @@ cmd_sync() {
 # Executada pelo systemd. Também dá para chamar direto para depurar.
 cmd_exec() {
   local n="${1:?uso: rotina exec <nome>}"; exists "$n"; load_conf "$n"
-  local d="$ROOT/$n" ctx="" out prompt sid flags=()
+  local d="$ROOT/$n" ctx="" out prompt sid rc=0 flags=()
   mkdir -p "$STATE_DIR" "$d/saidas"
   export ROTINA_STATE="$STATE_DIR/$n.seen"
   touch "$ROTINA_STATE"
@@ -91,7 +91,10 @@ cmd_exec() {
 
   # Pasta de rascunho da rotina, liberada para o Claude com --add-dir: sem ela,
   # no modo dontAsk, qualquer escrita fora de $DIR (worktree, /tmp) é negada.
-  local tmp="${TMPDIR:-/tmp}/rotina-$n"
+  # Fica no disco, não no /tmp: em muitas distros o /tmp é tmpfs (RAM), e um
+  # worktree com node_modules enche ele. No mesmo disco do store do pnpm, o
+  # install vira hardlink em vez de cópia.
+  local tmp="${XDG_CACHE_HOME:-$HOME/.cache}/rotinas/$n"
   mkdir -p "$tmp"
 
   prompt="$(cat "$d/prompt.md")"
@@ -107,7 +110,13 @@ cmd_exec() {
   else
     flags=(--no-session-persistence)
   fi
-  ( cd "$DIR" && claude -p "$prompt" --permission-mode "$MODE" --allowedTools "$TOOLS" --add-dir "$tmp" "${flags[@]}" ) >>"$out"
+  ( cd "$DIR" && claude -p "$prompt" --permission-mode "$MODE" --allowedTools "$TOOLS" --add-dir "$tmp" "${flags[@]}" ) >>"$out" || rc=$?
+
+  # Limpa a pasta de rascunho (mesmo com falha ou worktree esquecido) e tira
+  # do git os worktrees que apontavam para ela.
+  rm -rf "$tmp"
+  git -C "$DIR" worktree prune 2>/dev/null || true
+  [[ "${rc:-0}" == 0 ]] || die "claude terminou com erro ($rc); veja $out"
 
   # Só marca como feito depois que o Claude terminou com sucesso.
   if [[ -n "$ctx" ]]; then printf '%s\n' "$ctx" >>"$ROTINA_STATE"; fi
