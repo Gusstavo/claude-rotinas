@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# rotina — gerencia rotinas do Claude Code agendadas via systemd (usuário).
+#
+# Cada rotina é uma pasta em ~/rotinas/<nome>/ com:
+#   prompt.md     o que o Claude deve fazer (lido a cada execução)
+#   rotina.conf   agenda, pasta de trabalho e ferramentas liberadas
+#   gate.sh       (opcional) pré-checagem barata: se não imprimir nada, a
+#                 execução é pulada sem chamar o Claude; o que ela imprime é
+#                 anexado ao prompt e, após sucesso, gravado em $ROTINA_STATE
+#   saidas/       resultado de cada execução
+set -euo pipefail
+
+ROOT="${ROTINAS_DIR:-$HOME/rotinas}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/rotinas"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+SELF="$(readlink -f "$0")"
+
+die() { echo "rotina: $*" >&2; exit 1; }
+unit() { echo "rotina-$1"; }
+exists() { [[ -f "$ROOT/$1/rotina.conf" ]] || die "rotina '$1' não existe (veja: rotina list)"; }
+names() { for d in "$ROOT"/*/; do [[ -f "$d/rotina.conf" ]] && basename "$d"; done; return 0; }
+
+load_conf() {
+  SCHEDULE="*:0/15"; DIR="$HOME"; TOOLS="Read,Grep,Glob"; MODE="dontAsk"; NOTIFY=1; SESSAO=1
+  # shellcheck disable=SC1090
+  source "$ROOT/$1/rotina.conf"
+}
+
+write_units() {
+  local n="$1"; load_conf "$n"
+  systemd-analyze calendar "$SCHEDULE" >/dev/null 2>&1 || die "SCHEDULE inválido em '$n': $SCHEDULE"
+  mkdir -p "$UNIT_DIR"
+  cat >"$UNIT_DIR/$(unit "$n").service" <<EOF
+[Unit]
+Description=Rotina Claude: $n
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc '"$SELF" exec "$n"'
+EOF
+  cat >"$UNIT_DIR/$(unit "$n").timer" <<EOF
+[Unit]
+Description=Agenda da rotina Claude: $n
+
+[Timer]
+OnCalendar=$SCHEDULE
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+# Deixa o systemd igual às pastas: cria/atualiza units, remove as órfãs,
+# liga as ativas e desliga as pausadas.
+cmd_sync() {
+  local n f
+  for f in "$UNIT_DIR"/rotina-*.timer; do
+    [[ -e "$f" ]] || continue
+    n="$(basename "$f" .timer)"; n="${n#rotina-}"
+    if [[ ! -f "$ROOT/$n/rotina.conf" ]]; then
+      systemctl --user disable --now "$(unit "$n").timer" >/dev/null 2>&1 || true
+      rm -f "$UNIT_DIR/$(unit "$n").timer" "$UNIT_DIR/$(unit "$n").service"
+      echo "removida: $n"
+    fi
+  done
+  for n in $(names); do write_units "$n"; done
+  systemctl --user daemon-reload
+  for n in $(names); do
+    if [[ -f "$ROOT/$n/.pausada" ]]; then
+      systemctl --user disable --now "$(unit "$n").timer" >/dev/null 2>&1 || true
+    else
+      systemctl --user enable "$(unit "$n").timer" >/dev/null 2>&1
+      systemctl --user restart "$(unit "$n").timer"   # aplica agenda nova
+    fi
+  done
+}
+
+# Executada pelo systemd. Também dá para chamar direto para depurar.
+cmd_exec() {
+  local n="${1:?uso: rotina exec <nome>}"; exists "$n"; load_conf "$n"
+  local d="$ROOT/$n" ctx="" out prompt sid flags=()
+  mkdir -p "$STATE_DIR" "$d/saidas"
+  export ROTINA_STATE="$STATE_DIR/$n.seen"
+  touch "$ROTINA_STATE"
+
+  if [[ -x "$d/gate.sh" ]]; then
+    ctx="$("$d/gate.sh")" || die "gate.sh falhou"
+    if [[ -z "$ctx" ]]; then echo "nada novo, pulando"; return 0; fi
+  fi
+
+  prompt="$(cat "$d/prompt.md")"
+  [[ -n "$ctx" ]] && prompt+=$'\n\n## Itens desta execução\n'"$ctx"
+  out="$d/saidas/$(date +%F_%H%M).md"
+  if [[ "$SESSAO" == 1 ]]; then
+    # Sessão salva e nomeada: aparece no /resume (rodando o claude em $DIR).
+    sid="$(cat /proc/sys/kernel/random/uuid)"
+    flags=(--session-id "$sid" --name "rotina:$n $(date '+%d/%m %H:%M')")
+    echo "$sid" >"$STATE_DIR/$n.ultima-sessao"
+    printf '<!-- sessão: %s — reabra com: rotina continuar %s -->\n\n' "$sid" "$n" >"$out"
+  else
+    flags=(--no-session-persistence)
+  fi
+  ( cd "$DIR" && claude -p "$prompt" --permission-mode "$MODE" --allowedTools "$TOOLS" "${flags[@]}" ) >>"$out"
+
+  # Só marca como feito depois que o Claude terminou com sucesso.
+  if [[ -n "$ctx" ]]; then printf '%s\n' "$ctx" >>"$ROTINA_STATE"; fi
+  if [[ "$NOTIFY" == 1 ]] && command -v notify-send >/dev/null; then
+    notify-send "Rotina $n" "$(head -c 300 "$out")" || true
+  fi
+  echo "saída: $out"
+}
+
+cmd_new() {
+  local n="${1:?uso: rotina new <nome>}"
+  [[ "$n" =~ ^[a-z0-9-]+$ ]] || die "nome: só letras minúsculas, números e hífen"
+  [[ -e "$ROOT/$n" ]] && die "'$n' já existe"
+  mkdir -p "$ROOT/$n"
+  cat >"$ROOT/$n/rotina.conf" <<'EOF'
+# Quando roda (formato OnCalendar do systemd). Teste: systemd-analyze calendar "<expr>"
+#   "*:0/15"            a cada 15 min
+#   "hourly"            de hora em hora
+#   "Mon..Fri 08:45"    dias úteis às 8h45
+SCHEDULE="*:0/15"
+
+# Pasta onde o claude roda (usa o CLAUDE.md e o .mcp.json de lá)
+DIR="$HOME/tempus"
+
+# Ferramentas liberadas. Com MODE=dontAsk, todo o resto é negado.
+TOOLS="Read,Grep,Glob"
+MODE="dontAsk"
+
+# Notificação no desktop ao terminar (1 liga, 0 desliga)
+NOTIFY=1
+
+# Salvar a sessão para abrir depois no /resume ou com "rotina continuar" (1/0)
+SESSAO=1
+EOF
+  printf '# Rotina: %s\n\nDescreva aqui o que o Claude deve fazer.\n' "$n" >"$ROOT/$n/prompt.md"
+  "${EDITOR:-nano}" "$ROOT/$n/prompt.md" "$ROOT/$n/rotina.conf"
+  cmd_sync
+  echo "rotina '$n' criada e agendada"
+}
+
+cmd_edit() {
+  local n="${1:?uso: rotina edit <nome>}"; exists "$n"
+  local files=("$ROOT/$n/prompt.md" "$ROOT/$n/rotina.conf")
+  [[ -e "$ROOT/$n/gate.sh" ]] && files+=("$ROOT/$n/gate.sh")
+  "${EDITOR:-nano}" "${files[@]}"
+  cmd_sync
+}
+
+cmd_rm() {
+  local n="${1:?uso: rotina rm <nome>}"; exists "$n"
+  read -rp "Remover a rotina '$n'? [s/N] " ok
+  [[ "$ok" == [sS] ]] || exit 0
+  mkdir -p "$ROOT/.lixeira"
+  mv "$ROOT/$n" "$ROOT/.lixeira/$n-$(date +%s)"
+  cmd_sync
+}
+
+cmd_pause()  { exists "$1"; touch "$ROOT/$1/.pausada"; cmd_sync; echo "pausada: $1"; }
+cmd_resume() { exists "$1"; rm -f "$ROOT/$1/.pausada"; cmd_sync; echo "retomada: $1"; }
+
+cmd_list() {
+  local n
+  printf '%-24s %-22s %s\n' ROTINA AGENDA ESTADO
+  for n in $(names); do
+    load_conf "$n"
+    printf '%-24s %-22s %s\n' "$n" "$SCHEDULE" "$([[ -f "$ROOT/$n/.pausada" ]] && echo pausada || echo ativa)"
+  done
+  echo
+  systemctl --user list-timers 'rotina-*' --no-pager
+}
+
+cmd_run() {
+  local n="${1:?uso: rotina run <nome>}"; exists "$n"
+  echo "rodando '$n' agora (acompanhe com: rotina logs $n -f)..."
+  systemctl --user start "$(unit "$n").service"
+  journalctl --user -u "$(unit "$n")" -n 5 --no-pager
+}
+
+# Abre a última execução como sessão interativa, para continuar a conversa.
+cmd_continuar() {
+  local n="${1:?uso: rotina continuar <nome>}"; exists "$n"; load_conf "$n"
+  local f="$STATE_DIR/$n.ultima-sessao"
+  [[ -s "$f" ]] || die "'$n' ainda não tem sessão salva"
+  cd "$DIR" && exec claude --resume "$(cat "$f")"
+}
+
+cmd_logs() { local n="${1:?uso: rotina logs <nome> [-f]}"; shift; journalctl --user -u "$(unit "$n")" -n 50 --no-pager "$@"; }
+
+usage() {
+  cat <<EOF
+uso: rotina <comando> [nome]
+
+  list              lista rotinas, agenda e próxima execução
+  new <nome>        cria uma rotina (abre o editor) e agenda
+  edit <nome>       edita prompt/agenda/gate e reaplica
+  run <nome>        executa agora
+  logs <nome> [-f]  mostra o log (-f acompanha)
+  continuar <nome>  abre a última execução no claude para seguir a conversa
+  pause <nome>      para de agendar, sem apagar
+  resume <nome>     volta a agendar
+  rm <nome>         remove (vai para $ROOT/.lixeira)
+  sync              reaplica tudo (use após editar arquivos à mão)
+
+Rotinas ficam em $ROOT/<nome>/. Mudar só o prompt.md não exige sync.
+EOF
+}
+
+case "${1:-}" in
+  list|ls) cmd_list ;;
+  new)     cmd_new "${2:-}" ;;
+  edit)    cmd_edit "${2:-}" ;;
+  run)     cmd_run "${2:-}" ;;
+  logs)    shift; cmd_logs "$@" ;;
+  continuar) cmd_continuar "${2:-}" ;;
+  pause)   cmd_pause "${2:?uso: rotina pause <nome>}" ;;
+  resume)  cmd_resume "${2:?uso: rotina resume <nome>}" ;;
+  rm)      cmd_rm "${2:-}" ;;
+  sync)    cmd_sync ;;
+  exec)    cmd_exec "${2:-}" ;;
+  *)       usage ;;
+esac
