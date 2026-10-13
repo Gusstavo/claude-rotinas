@@ -14,6 +14,12 @@ mkdir -p "$HOME/.local/bin" "$ROOT"
 ln -sf "$REPO/rotina" "$HOME/.local/bin/rotina"
 echo "comando instalado: ~/.local/bin/rotina"
 
+# Autocomplete (o bash-completion carrega sob demanda desta pasta).
+COMPLETIONS="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+mkdir -p "$COMPLETIONS"
+ln -sf "$REPO/rotina-completion.bash" "$COMPLETIONS/rotina"
+echo "autocomplete instalado: abra um terminal novo"
+
 if [[ ! -e "$ROOT/review-prs" ]]; then
   read -rp "Copiar a rotina de exemplo review-prs para $ROOT? [s/N] " ok
   [[ "$ok" == [sS] ]] && cp -r "$REPO/exemplos/review-prs" "$ROOT/review-prs"
