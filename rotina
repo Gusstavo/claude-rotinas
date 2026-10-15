@@ -22,6 +22,7 @@ names() { for d in "$ROOT"/*/; do [[ -f "$d/rotina.conf" ]] && basename "$d"; do
 
 load_conf() {
   SCHEDULE="*:0/15"; DIR="$HOME"; TOOLS="Read,Grep,Glob"; MODE="dontAsk"; NOTIFY=1; SESSAO=1
+  MAX_TENTATIVAS=3; EVIDENCIAS_DIAS=30
   # shellcheck disable=SC1090
   source "$ROOT/$1/rotina.conf"
 }
@@ -110,16 +111,48 @@ cmd_exec() {
   else
     flags=(--no-session-persistence)
   fi
-  ( cd "$DIR" && claude -p "$prompt" --permission-mode "$MODE" --allowedTools "$TOOLS" --add-dir "$tmp" "${flags[@]}" ) >>"$out" || rc=$?
+  # $d/saidas também é liberada: é onde a rotina guarda o que deve sobreviver à
+  # execução (ex.: saidas/evidencias). Escrita fora das pastas liberadas é negada.
+  ( cd "$DIR" && claude -p "$prompt" --permission-mode "$MODE" --allowedTools "$TOOLS" --add-dir "$tmp" --add-dir "$d/saidas" "${flags[@]}" </dev/null ) >>"$out" || rc=$?
+
+  # Itens que o Claude pediu para tentar de novo: uma linha igual à do gate em
+  # $tmp/repetir. Lido antes de apagar a pasta de rascunho.
+  local repetir=""
+  [[ -f "$tmp/repetir" ]] && repetir="$(cat "$tmp/repetir")"
 
   # Limpa a pasta de rascunho (mesmo com falha ou worktree esquecido) e tira
   # do git os worktrees que apontavam para ela.
   rm -rf "$tmp"
   git -C "$DIR" worktree prune 2>/dev/null || true
+  # Pasta do Claude no /tmp desta sessão (saída de comandos em background). Em
+  # muitas distros o /tmp é tmpfs e só seria limpo no reboot.
+  if [[ -n "${sid:-}" ]]; then
+    rm -rf "${TMPDIR:-/tmp}/claude-$(id -u)/$(sed 's/[^a-zA-Z0-9]/-/g' <<<"$DIR")/$sid"
+  fi
+  # Evidências com mais de $EVIDENCIAS_DIAS dias.
+  if [[ -d "$d/saidas/evidencias" ]]; then
+    find "$d/saidas/evidencias" -mindepth 1 -maxdepth 1 -type d -mtime +"$EVIDENCIAS_DIAS" -exec rm -rf {} +
+  fi
   [[ "${rc:-0}" == 0 ]] || die "claude terminou com erro ($rc); veja $out"
 
-  # Só marca como feito depois que o Claude terminou com sucesso.
-  if [[ -n "$ctx" ]]; then printf '%s\n' "$ctx" >>"$ROTINA_STATE"; fi
+  # Só marca como feito depois que o Claude terminou com sucesso. Item em
+  # $tmp/repetir fica de fora para o gate trazê-lo de novo, até
+  # $MAX_TENTATIVAS vezes; depois disso é marcado como feito.
+  local item tentativas
+  local tent_file="$STATE_DIR/$n.tentativas"
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    if grep -qxF "$item" <<<"$repetir"; then
+      printf '%s\n' "$item" >>"$tent_file"
+      tentativas="$(grep -cxF "$item" "$tent_file")"
+      if (( tentativas < MAX_TENTATIVAS )); then
+        echo "repetir na próxima ($tentativas/$MAX_TENTATIVAS): $item"
+        continue
+      fi
+      echo "desistindo após $tentativas tentativas: $item"
+    fi
+    printf '%s\n' "$item" >>"$ROTINA_STATE"
+  done <<<"$ctx"
   if [[ "$NOTIFY" == 1 ]] && command -v notify-send >/dev/null; then
     notify-send "Rotina $n" "$(grep -v "^<!--" "$out" | head -c 300 | iconv -c -f utf-8 -t utf-8 2>/dev/null)" || true
   fi

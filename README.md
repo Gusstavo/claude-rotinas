@@ -39,7 +39,11 @@ As rotinas ficam em `~/rotinas/<nome>/`, fora deste repo, porque os prompts pode
 | `prompt.md` | O que o Claude faz. É lido a cada execução, então editar não exige `sync`. |
 | `rotina.conf` | `SCHEDULE` (formato OnCalendar), `DIR` (onde o claude roda), `TOOLS` (ferramentas liberadas), `MODE`, `NOTIFY`, `SESSAO`. |
 | `gate.sh` | Opcional. Imprime os itens novos; sem saída, a execução é pulada. O que ele imprime vai para o prompt e, depois de um sucesso, para `$ROTINA_STATE`, onde o gate pode consultar o que já foi feito. |
-| `saidas/` | Resultado de cada execução, com o ID da sessão no topo. |
+| `saidas/` | Resultado de cada execução, com o ID da sessão no topo. A pasta é liberada para escrita do Claude; `saidas/evidencias/<pasta>` com mais de `EVIDENCIAS_DIAS` dias (padrão 30) é apagada no fim de cada execução. |
+
+Para um item do gate voltar na próxima execução (ex.: falha passageira), o Claude grava a linha dele, igual à do gate, em `<pasta temporária>/repetir`. O item fica fora do `$ROTINA_STATE` até `MAX_TENTATIVAS` vezes no mesmo item (padrão 3, configurável no `rotina.conf`); depois disso é marcado como feito.
+
+No modo `dontAsk`, redirecionar para arquivo (`> log`) é negado mesmo dentro das pastas liberadas. Para gravar arquivo, use a ferramenta Write; para processo em background, deixe a saída com a própria ferramenta.
 
 Exemplos de `SCHEDULE` (teste com `systemd-analyze calendar "<expr>"`):
 
